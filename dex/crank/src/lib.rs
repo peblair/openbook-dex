@@ -1,11 +1,10 @@
-#![deny(unaligned_references)]
 #![allow(dead_code)]
 #![allow(clippy::too_many_arguments)]
 
 use std::borrow::Cow;
 use std::cmp::{max, min};
 use std::collections::BTreeSet;
-use std::convert::identity;
+use std::convert::{identity, TryInto};
 use std::mem::size_of;
 use std::num::NonZeroU64;
 use std::sync::{Arc, Mutex};
@@ -16,7 +15,6 @@ use anyhow::{format_err, Result};
 use clap::Parser;
 use debug_print::debug_println;
 use log::{error, info};
-use rand::rngs::OsRng;
 use safe_transmute::{
     guard::SingleManyGuard,
     to_bytes::{transmute_one_to_bytes, transmute_to_bytes},
@@ -58,6 +56,10 @@ use serum_dex::state::{AccountFlag, Market, MarketState, MarketStateV2};
 
 pub fn with_logging<F: FnOnce()>(_to: &str, fnc: F) {
     fnc();
+}
+
+fn bytes_to_sized(bytes: &[u8]) -> &[u8; 32] {
+    bytes.try_into().unwrap()
 }
 
 fn read_keypair_file(s: &str) -> Result<Keypair> {
@@ -296,8 +298,7 @@ pub fn start(opts: Opts) -> Result<()> {
             port,
         } => {
             let client = opts.client();
-            let mut runtime = tokio::runtime::Builder::new()
-                .basic_scheduler()
+            let mut runtime = tokio::runtime::Builder::new_current_thread()
                 .build()
                 .unwrap();
             runtime
@@ -449,24 +450,24 @@ fn get_keys_for_market<'a>(
     );
     Ok(MarketPubkeys {
         market: Box::new(*market),
-        req_q: Box::new(Pubkey::new(transmute_one_to_bytes(&identity(
+        req_q: Box::new(Pubkey::from(*bytes_to_sized(transmute_one_to_bytes(&identity(
             market_state.req_q,
-        )))),
-        event_q: Box::new(Pubkey::new(transmute_one_to_bytes(&identity(
+        ))))),
+        event_q: Box::new(Pubkey::from(*bytes_to_sized(transmute_one_to_bytes(&identity(
             market_state.event_q,
-        )))),
-        bids: Box::new(Pubkey::new(transmute_one_to_bytes(&identity(
+        ))))),
+        bids: Box::new(Pubkey::from(*bytes_to_sized(transmute_one_to_bytes(&identity(
             market_state.bids,
-        )))),
-        asks: Box::new(Pubkey::new(transmute_one_to_bytes(&identity(
+        ))))),
+        asks: Box::new(Pubkey::from(*bytes_to_sized(transmute_one_to_bytes(&identity(
             market_state.asks,
-        )))),
-        coin_vault: Box::new(Pubkey::new(transmute_one_to_bytes(&identity(
+        ))))),
+        coin_vault: Box::new(Pubkey::from(*bytes_to_sized(transmute_one_to_bytes(&identity(
             market_state.coin_vault,
-        )))),
-        pc_vault: Box::new(Pubkey::new(transmute_one_to_bytes(&identity(
+        ))))),
+        pc_vault: Box::new(Pubkey::from(*bytes_to_sized(transmute_one_to_bytes(&identity(
             market_state.pc_vault,
-        )))),
+        ))))),
         vault_signer_key: Box::new(vault_signer_key),
     })
 }
@@ -618,7 +619,7 @@ fn consume_events_loop(
 
             let mut account_metas = Vec::with_capacity(orders_accounts.len() + 4);
             for pubkey_words in orders_accounts {
-                let pubkey = Pubkey::new(transmute_to_bytes(&pubkey_words));
+                let pubkey = Pubkey::from(*bytes_to_sized(transmute_to_bytes(&pubkey_words)));
                 account_metas.push(AccountMeta::new(pubkey, false));
             }
             for pubkey in [
@@ -803,7 +804,7 @@ pub fn consume_events_instruction(
 
     let mut account_metas = Vec::with_capacity(orders_accounts.len() + 4);
     for pubkey_words in orders_accounts {
-        let pubkey = Pubkey::new(transmute_to_bytes(&pubkey_words));
+        let pubkey = Pubkey::from(*bytes_to_sized(transmute_to_bytes(&pubkey_words)));
         account_metas.push(AccountMeta::new(pubkey, false));
     }
     for pubkey in [&state.market, &state.event_q, coin_wallet, pc_wallet].iter() {
@@ -823,11 +824,11 @@ pub fn consume_events_instruction(
 }
 
 fn whole_shebang(client: &RpcClient, program_id: &Pubkey, payer: &Keypair) -> Result<()> {
-    let coin_mint = Keypair::generate(&mut OsRng);
+    let coin_mint = Keypair::new();
     debug_println!("Coin mint: {}", coin_mint.pubkey());
     create_and_init_mint(client, payer, &coin_mint, &payer.pubkey(), 3)?;
 
-    let pc_mint = Keypair::generate(&mut OsRng);
+    let pc_mint = Keypair::new();
     debug_println!("Pc mint: {}", pc_mint.pubkey());
     create_and_init_mint(client, payer, &pc_mint, &payer.pubkey(), 3)?;
 
@@ -1407,7 +1408,7 @@ fn create_dex_account(
     unpadded_len: usize,
 ) -> Result<(Keypair, Instruction)> {
     let len = unpadded_len + 12;
-    let key = Keypair::generate(&mut OsRng);
+    let key = Keypair::new();
     let create_account_instr = solana_sdk::system_instruction::create_account(
         payer,
         &key.pubkey(),
@@ -1469,7 +1470,7 @@ fn create_account(
     owner_pubkey: &Pubkey,
     payer: &Keypair,
 ) -> Result<Keypair> {
-    let spl_account = Keypair::generate(&mut OsRng);
+    let spl_account = Keypair::new();
     let signers = vec![payer, &spl_account];
 
     let lamports = client.get_minimum_balance_for_rent_exemption(spl_token::state::Account::LEN)?;
@@ -1537,7 +1538,7 @@ fn mint_to_existing_account(
 }
 
 fn initialize_token_account(client: &RpcClient, mint: &Pubkey, owner: &Keypair) -> Result<Keypair> {
-    let recip_keypair = Keypair::generate(&mut OsRng);
+    let recip_keypair = Keypair::new();
     let lamports = client.get_minimum_balance_for_rent_exemption(spl_token::state::Account::LEN)?;
     let create_recip_instr = solana_sdk::system_instruction::create_account(
         &owner.pubkey(),

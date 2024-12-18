@@ -16,7 +16,7 @@ use bytemuck::{
     bytes_of, bytes_of_mut, cast, cast_slice, cast_slice_mut, from_bytes_mut, try_cast_mut,
     try_cast_slice, try_cast_slice_mut, try_from_bytes, try_from_bytes_mut, Pod, Zeroable,
 };
-use enumflags2::BitFlags;
+use enumflags2::{BitFlags, bitflags};
 use num_traits::FromPrimitive;
 use safe_transmute::{self, to_bytes::transmute_to_bytes, trivial::TriviallyTransmutable};
 
@@ -38,7 +38,7 @@ use crate::{
     matching::{OrderBookState, OrderType, RequestProceeds, Side},
 };
 
-use anchor_lang::prelude::{borsh, emit, event, AnchorDeserialize, AnchorSerialize};
+use anchor_lang::prelude::{borsh, emit, event, Discriminator, AnchorDeserialize, AnchorSerialize};
 
 declare_check_assert_macros!(SourceFileId::State);
 
@@ -53,7 +53,8 @@ impl ToAlignedBytes for Pubkey {
     }
 }
 
-#[derive(Copy, Clone, BitFlags, Debug, Eq, PartialEq)]
+#[bitflags]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[repr(u64)]
 pub enum AccountFlag {
     Initialized = 1u64 << 0,
@@ -737,7 +738,9 @@ impl MarketState {
     }
 
     fn pubkey(&self) -> Pubkey {
-        Pubkey::new(cast_slice(&identity(self.own_address) as &[_]))
+        let own_address = &identity(self.own_address) as &[u64];
+        let own_address: &[u8; 32] = cast_slice(own_address).try_into().unwrap();
+        Pubkey::from(*own_address)
     }
 }
 
@@ -1113,7 +1116,8 @@ impl RequestQueue<'_> {
     }
 }
 
-#[derive(Copy, Clone, BitFlags, Debug)]
+#[bitflags]
+#[derive(Copy, Clone, Debug)]
 #[repr(u8)]
 enum RequestFlag {
     NewOrder = 0x01,
@@ -1328,7 +1332,8 @@ impl QueueHeader for EventQueueHeader {
 
 pub type EventQueue<'a> = Queue<'a, EventQueueHeader>;
 
-#[derive(Copy, Clone, BitFlags, Debug)]
+#[bitflags]
+#[derive(Copy, Clone, Debug)]
 #[repr(u8)]
 enum EventFlag {
     Fill = 0x1,
@@ -1539,7 +1544,7 @@ impl EventView {
     }
 }
 
-#[event]
+#[event(discriminator=9)]
 pub struct FillEventLog {
     market: Pubkey,
     open_orders: Pubkey,
@@ -1556,7 +1561,7 @@ pub struct FillEventLog {
     referrer_rebate: Option<u64>,
 }
 
-#[event]
+#[event(discriminator=1)]
 pub struct OpenOrdersBalanceLog {
     open_orders: Pubkey,
     open_orders_owner: Pubkey,
@@ -3243,9 +3248,12 @@ impl State {
                         );
                     }
 
-                    let open_orders_pk = Pubkey::new(cast_slice(&identity(owner) as &[_]));
-                    let open_orders_owner_pk =
-                        Pubkey::new(cast_slice(&identity(open_orders.owner) as &[_]));
+                    let owner = &identity(owner) as &[u64];
+                    let owner: &[u8; 32] = cast_slice(owner).try_into().unwrap();
+                    let open_orders_pk = Pubkey::from(*owner);
+                    let open_orders_owner = &identity(open_orders.owner) as &[u64];
+                    let open_orders_owner: &[u8; 32] = cast_slice(open_orders_owner).try_into().unwrap();
+                    let open_orders_owner_pk = Pubkey::from(*open_orders_owner);
                     emit!(FillEventLog {
                         market: market.pubkey(),
                         bid: match side {
